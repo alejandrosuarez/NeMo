@@ -526,24 +526,19 @@ if __name__ == "__main__":
             if not normalizer.lm:
                 normalized_texts = set(normalized_texts)
                 
-            if True:
-                pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
-                normalized_text, cer = normalizer.select_best_match(
-                    normalized_texts=normalized_texts,
-                    pred_text=pred_text,
-                    input_text=text,
-                    verbose=args.verbose,
-                    remove_punct=not args.no_remove_punct_for_cer,
-                    cer_threshold=args.cer_threshold,
-                )
-                # print(f"Transcript: {pred_text}")
-                # print(f"Normalized: {normalized_text}")
-                all_norm_output.append(normalized_text)
+            pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
+            normalized_text, cer = normalizer.select_best_match(
+                normalized_texts=normalized_texts,
+                pred_text=pred_text,
+                input_text=text,
+                verbose=args.verbose,
+                remove_punct=not args.no_remove_punct_for_cer,
+                cer_threshold=args.cer_threshold,
+            )
+            # print(f"Transcript: {pred_text}")
+            # print(f"Normalized: {normalized_text}")
+            all_norm_output.append(normalized_text)
                 
-            else:
-                print("Normalization options:")
-                for norm_text in normalized_texts:
-                    print(norm_text)
                     
         output_text = []
         with open(args.text, "r") as f:
