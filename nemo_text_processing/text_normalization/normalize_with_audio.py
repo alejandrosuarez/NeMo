@@ -57,7 +57,7 @@ To run with a single audio file, specify path to audio and text with:
            --audio_data PATH/TO/AUDIO.WAV \
            --language en \
            --text raw text OR PATH/TO/.TXT/FILE
-           --model QuartzNet15x5Base-En \
+           --model QuartzNet15x5Base-En, stt_de_quartznet15x5, stt_fr_quartznet15x5, stt_es_quartznet15x5 \
            --verbose
 
 To see possible normalization options for a text input without an audio file (could be used for debugging), run:
@@ -365,7 +365,7 @@ def parse_args():
     parser.add_argument(
         "--cache_dir",
         help="path to a dir with .far grammar file. Set to None to avoid using cache",
-        default=None,
+        default="cache",
         type=str,
     )
     parser.add_argument("--n_jobs", default=-2, type=int, help="The maximum number of concurrently running jobs")
@@ -485,7 +485,11 @@ if __name__ == "__main__":
         raise ValueError("NeMo ASR collection is not installed.")
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
+    
+    all_norm_output = []
+    
     if args.text is not None:
+        asr_model = get_asr_model(args.model)
         normalizer = NormalizerWithAudio(
             input_case=args.input_case,
             lang=args.language,
@@ -496,34 +500,61 @@ if __name__ == "__main__":
         )
 
         if os.path.exists(args.text):
-            with open(args.text, 'r') as f:
-                args.text = f.read().strip()
-        normalized_texts = normalizer.normalize(
-            text=args.text,
-            verbose=args.verbose,
-            n_tagged=args.n_tagged,
-            punct_post_process=not args.no_punct_post_process,
-        )
+            
+            metadata = dict()
+            all_audio_data = []
+            all_input_text = []
+            all_targets = []
 
-        if not normalizer.lm:
-            normalized_texts = set(normalized_texts)
-        if args.audio_data:
-            asr_model = get_asr_model(args.model)
-            pred_text = asr_model.transcribe([args.audio_data])[0]
-            normalized_text, cer = normalizer.select_best_match(
-                normalized_texts=normalized_texts,
-                pred_text=pred_text,
-                input_text=args.text,
+            with open(args.text) as f:
+                for line in f:
+                    filename, _, _, text = line.strip().split('|')
+                    metadata[filename] = text
+                    data = args.text.split('/')[0]
+                    all_audio_data.append(f'{data}/wavs/{filename}.wav')
+                    all_input_text.append(text)
+                    all_targets.append([])
+
+        for idx, text in enumerate(all_input_text):
+            normalized_texts = normalizer.normalize(
+                text=text,
                 verbose=args.verbose,
-                remove_punct=not args.no_remove_punct_for_cer,
-                cer_threshold=args.cer_threshold,
+                n_tagged=args.n_tagged,
+                punct_post_process=not args.no_punct_post_process,
             )
-            print(f"Transcript: {pred_text}")
-            print(f"Normalized: {normalized_text}")
-        else:
-            print("Normalization options:")
-            for norm_text in normalized_texts:
-                print(norm_text)
+
+            if not normalizer.lm:
+                normalized_texts = set(normalized_texts)
+                
+            if True:
+                pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
+                normalized_text, cer = normalizer.select_best_match(
+                    normalized_texts=normalized_texts,
+                    pred_text=pred_text,
+                    input_text=text,
+                    verbose=args.verbose,
+                    remove_punct=not args.no_remove_punct_for_cer,
+                    cer_threshold=args.cer_threshold,
+                )
+                # print(f"Transcript: {pred_text}")
+                # print(f"Normalized: {normalized_text}")
+                all_norm_output.append(normalized_text)
+                
+            else:
+                print("Normalization options:")
+                for norm_text in normalized_texts:
+                    print(norm_text)
+                    
+        output_text = []
+        with open(args.text, "r") as f:
+            for idx, line in enumerate(f):
+                line = line.strip()
+                line = line + "|" + all_norm_output[idx] + "\n"
+                output_text.append(line)
+        with open(args.text, "w") as f:
+            for line in output_text:
+                f.write(line)
+                
     elif not os.path.exists(args.audio_data):
         raise ValueError(f"{args.audio_data} not found.")
     elif args.audio_data.endswith('.json'):
