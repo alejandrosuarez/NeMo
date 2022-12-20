@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 import json
 import os
 import time
@@ -485,9 +486,9 @@ if __name__ == "__main__":
         raise ValueError("NeMo ASR collection is not installed.")
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
-    
+
     all_norm_output = []
-    
+
     if args.text is not None:
         asr_model = get_asr_model(args.model)
         normalizer = NormalizerWithAudio(
@@ -500,18 +501,18 @@ if __name__ == "__main__":
         )
 
         if os.path.exists(args.text):
-            
+
             metadata = dict()
             all_audio_data = []
             all_input_text = []
             all_targets = []
-
+            data = Path(args.text).parent
             with open(args.text) as f:
                 for line in f:
-                    filename, _, _, text = line.strip().split('|')
+                    filename, *_, text = line.strip().split('|')
                     metadata[filename] = text
-                    data = args.text.split('/')[0]
-                    all_audio_data.append(f'{data}/wavs/{filename}.wav')
+                    full_path = data / "wavs" / f'{filename}.wav'
+                    all_audio_data.append(str(full_path))
                     all_input_text.append(text)
                     all_targets.append([])
 
@@ -525,7 +526,7 @@ if __name__ == "__main__":
 
             if not normalizer.lm:
                 normalized_texts = set(normalized_texts)
-                
+
             pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
             normalized_text, cer = normalizer.select_best_match(
                 normalized_texts=normalized_texts,
@@ -538,8 +539,8 @@ if __name__ == "__main__":
             # print(f"Transcript: {pred_text}")
             # print(f"Normalized: {normalized_text}")
             all_norm_output.append(normalized_text)
-                
-                    
+
+
         output_text = []
         with open(args.text, "r") as f:
             for idx, line in enumerate(f):
@@ -549,7 +550,7 @@ if __name__ == "__main__":
         with open(args.text, "w") as f:
             for line in output_text:
                 f.write(line)
-                
+
     elif not os.path.exists(args.audio_data):
         raise ValueError(f"{args.audio_data} not found.")
     elif args.audio_data.endswith('.json'):
