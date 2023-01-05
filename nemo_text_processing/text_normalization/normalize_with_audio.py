@@ -487,8 +487,14 @@ if __name__ == "__main__":
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
 
-    all_norm_output = []
+    all_meta = []
+    with open(args.text, "r") as f:
+        for idx, line in enumerate(f):
+            line = line.strip()
+            all_meta.append(line)
+    # all_meta = Path(args.text).read_text().splitlines()
 
+    all_norm_output = []
     if args.text is not None:
         asr_model = get_asr_model(args.model)
         normalizer = NormalizerWithAudio(
@@ -501,7 +507,6 @@ if __name__ == "__main__":
         )
 
         if os.path.exists(args.text):
-
             metadata = dict()
             all_audio_data = []
             all_input_text = []
@@ -540,16 +545,11 @@ if __name__ == "__main__":
             # print(f"Normalized: {normalized_text}")
             all_norm_output.append(normalized_text)
 
-
-        output_text = []
-        with open(args.text, "r") as f:
-            for idx, line in enumerate(f):
-                line = line.strip()
-                line = line + "|" + all_norm_output[idx] + "\n"
-                output_text.append(line)
-        with open(args.text, "w") as f:
-            for line in output_text:
-                f.write(line)
+            if (idx + 1) % 50 == 0:
+                with open(args.text + 'norm', "a") as f_out:
+                    for out_idx, line in enumerate(all_norm_output):
+                        f_out.write(all_meta[idx-10 + out_idx+1] + '|' + line + "\n")
+                all_norm_output = []
 
     elif not os.path.exists(args.audio_data):
         raise ValueError(f"{args.audio_data} not found.")
