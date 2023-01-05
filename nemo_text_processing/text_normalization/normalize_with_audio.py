@@ -487,12 +487,7 @@ if __name__ == "__main__":
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
 
-    all_meta = []
-    with open(args.text, "r") as f:
-        for idx, line in enumerate(f):
-            line = line.strip()
-            all_meta.append(line)
-    # all_meta = Path(args.text).read_text().splitlines()
+    all_meta = Path(args.text).read_text().splitlines()
 
     all_norm_output = []
     if args.text is not None:
