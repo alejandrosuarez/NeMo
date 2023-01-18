@@ -502,19 +502,8 @@ if __name__ == "__main__":
         raise ValueError("NeMo ASR collection is not installed.")
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
-<<<<<<< HEAD
-    
-    if os.path.exists(args.checkpoint):
-        all_norm_output = load_checkpoint(args.checkpoint)
-    else:
-        all_norm_output = dict()
-    
-=======
 
-    all_meta = Path(args.text).read_text().splitlines()
-
-    all_norm_output = []
->>>>>>> e52117b246e85b814ae76194a39c416a60f6db58
+    all_norm_output = dict()
     if args.text is not None:
         asr_model = get_asr_model(args.model)
         normalizer = NormalizerWithAudio(
@@ -527,18 +516,18 @@ if __name__ == "__main__":
         )
 
         if os.path.exists(args.text):
-            
+
             all_meta = dict()
             with open(args.text, "r") as f:
                 for line in f:
                     line = line.strip()
-                    fname, _, _, text = line.split('|')
+                    fname, *_, text = line.split('|')
                     all_meta[fname] = {'raw': line,
                                        'data_path': f"{Path(args.text).parent}/wavs/{fname}.wav",
                                        'text': text}
 
         for idx, fname in enumerate(tqdm(all_meta)):
-            
+
             if fname in all_norm_output:
                 pass
             else:
@@ -551,7 +540,7 @@ if __name__ == "__main__":
 
                 if not normalizer.lm:
                     normalized_texts = set(normalized_texts)
-                
+
                 pred_text = asr_model.transcribe([all_meta[fname]['data_path']])[0]
                 normalized_text, cer = normalizer.select_best_match(
                     normalized_texts=normalized_texts,
@@ -564,16 +553,17 @@ if __name__ == "__main__":
                 # print(f"[{idx}] Transcript: {pred_text}")
                 # print(f"[{idx}] Normalized: {normalized_text}")
                 all_norm_output[fname] = normalized_text
-                
+
                 if (idx+1) % 5 == 0:
                     save_to_checkpoint(args.checkpoint, all_norm_output)
-        
+
         save_to_checkpoint(args.checkpoint, all_norm_output)
-        
-        with open(Path(args.text).stem + '_norm.csv', "w") as f_out: 
+
+        new_metadata = Path(args.text).parent / (Path(args.text).stem + '_norm.csv')
+        with open(new_metadata, "w") as f_out:
             for fname in all_meta:
                 f_out.write(all_meta[fname]['raw'] + '|' + all_norm_output[fname] + "\n")
-            
+
     elif not os.path.exists(args.audio_data):
         raise ValueError(f"{args.audio_data} not found.")
     elif args.audio_data.endswith('.json'):
