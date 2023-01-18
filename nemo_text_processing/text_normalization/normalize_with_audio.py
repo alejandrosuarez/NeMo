@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 import json
 import os
 import time
@@ -501,12 +502,19 @@ if __name__ == "__main__":
         raise ValueError("NeMo ASR collection is not installed.")
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
+<<<<<<< HEAD
     
     if os.path.exists(args.checkpoint):
         all_norm_output = load_checkpoint(args.checkpoint)
     else:
         all_norm_output = dict()
     
+=======
+
+    all_meta = Path(args.text).read_text().splitlines()
+
+    all_norm_output = []
+>>>>>>> e52117b246e85b814ae76194a39c416a60f6db58
     if args.text is not None:
         asr_model = get_asr_model(args.model)
         normalizer = NormalizerWithAudio(
