@@ -18,6 +18,8 @@ import time
 from argparse import ArgumentParser
 from glob import glob
 from typing import List, Optional, Tuple
+import pickle
+from pathlib import Path
 
 import pynini
 from joblib import Parallel, delayed
@@ -378,6 +380,9 @@ def parse_args():
         type=int,
         help="if CER for pred_text is above the cer_threshold, no normalization will be performed",
     )
+    parser.add_argument(
+        '--checkpoint', type=str, default='all_norm_output.pkl', help='Checkpoint path for normalized outputs'
+    )
     parser.add_argument("--batch_size", default=200, type=int, help="Number of examples for each process")
     return parser.parse_args()
 
@@ -478,6 +483,17 @@ def normalize_manifest(
     print(f'Normalized version saved at {output_filename}')
 
 
+def save_to_checkpoint(filename, all_norm_output):
+    with open(filename, 'wb') as f:
+        pickle.dump(all_norm_output, f)
+
+
+def load_checkpoint(filename):
+    with open(filename, 'rb') as f:
+        all_norm_output = pickle.load(f)
+        return all_norm_output
+
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -486,13 +502,10 @@ if __name__ == "__main__":
     start = time.time()
     args.whitelist = os.path.abspath(args.whitelist) if args.whitelist else None
     
-    all_meta = []
-    with open(args.text, "r") as f:
-            for idx, line in enumerate(f):
-                line = line.strip()
-                all_meta.append(line)
-    
-    all_norm_output = []
+    if os.path.exists(args.checkpoint):
+        all_norm_output = load_checkpoint(args.checkpoint)
+    else:
+        all_norm_output = dict()
     
     if args.text is not None:
         asr_model = get_asr_model(args.model)
@@ -507,50 +520,52 @@ if __name__ == "__main__":
 
         if os.path.exists(args.text):
             
-            metadata = dict()
-            all_audio_data = []
-            all_input_text = []
-            all_targets = []
-
-            with open(args.text) as f:
+            all_meta = dict()
+            with open(args.text, "r") as f:
                 for line in f:
-                    filename, _, _, text = line.strip().split('|')
-                    metadata[filename] = text
-                    data = args.text.split('/')[0]
-                    all_audio_data.append(f'{data}/wavs/{filename}.wav')
-                    all_input_text.append(text)
-                    all_targets.append([])
+                    line = line.strip()
+                    fname, _, _, text = line.split('|')
+                    all_meta[fname] = {'raw': line,
+                                       'data_path': f"{Path(args.text).parent}/wavs/{fname}.wav",
+                                       'text': text}
 
-        for idx, text in enumerate(all_input_text):
-            normalized_texts = normalizer.normalize(
-                text=text,
-                verbose=args.verbose,
-                n_tagged=args.n_tagged,
-                punct_post_process=not args.no_punct_post_process,
-            )
-
-            if not normalizer.lm:
-                normalized_texts = set(normalized_texts)
-                
-            pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
-            normalized_text, cer = normalizer.select_best_match(
-                normalized_texts=normalized_texts,
-                pred_text=pred_text,
-                input_text=text,
-                verbose=args.verbose,
-                remove_punct=not args.no_remove_punct_for_cer,
-                cer_threshold=args.cer_threshold,
-            )
-            # print(f"Transcript: {pred_text}")
-            # print(f"Normalized: {normalized_text}")
-            all_norm_output.append(normalized_text)
+        for idx, fname in enumerate(tqdm(all_meta)):
             
-            if (idx+1) % 50 == 0:
-                with open(args.text + 'norm', "a") as f_out: 
-                    for out_idx, line in enumerate(all_norm_output):
-                        f_out.write(all_meta[idx-10 + out_idx+1] + '|' + line + "\n")  
-                all_norm_output = [] 
+            if fname in all_norm_output:
+                pass
+            else:
+                normalized_texts = normalizer.normalize(
+                    text=all_meta[fname]['text'],
+                    verbose=args.verbose,
+                    n_tagged=args.n_tagged,
+                    punct_post_process=not args.no_punct_post_process,
+                )
+
+                if not normalizer.lm:
+                    normalized_texts = set(normalized_texts)
                 
+                pred_text = asr_model.transcribe([all_meta[fname]['data_path']])[0]
+                normalized_text, cer = normalizer.select_best_match(
+                    normalized_texts=normalized_texts,
+                    pred_text=pred_text,
+                    input_text=text,
+                    verbose=args.verbose,
+                    remove_punct=not args.no_remove_punct_for_cer,
+                    cer_threshold=args.cer_threshold,
+                )
+                # print(f"[{idx}] Transcript: {pred_text}")
+                # print(f"[{idx}] Normalized: {normalized_text}")
+                all_norm_output[fname] = normalized_text
+                
+                if (idx+1) % 5 == 0:
+                    save_to_checkpoint(args.checkpoint, all_norm_output)
+        
+        save_to_checkpoint(args.checkpoint, all_norm_output)
+        
+        with open(Path(args.text).stem + '_norm.csv', "w") as f_out: 
+            for fname in all_meta:
+                f_out.write(all_meta[fname]['raw'] + '|' + all_norm_output[fname] + "\n")
+            
     elif not os.path.exists(args.audio_data):
         raise ValueError(f"{args.audio_data} not found.")
     elif args.audio_data.endswith('.json'):
