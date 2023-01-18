@@ -29,8 +29,30 @@ from tqdm import tqdm
 
 from nemo.utils import logging
 
+import json
+import os
+import time
+from argparse import ArgumentParser
+from glob import glob
+from typing import List, Optional, Tuple
+
+import pynini
+from joblib import Parallel, delayed
+from nemo_text_processing.text_normalization.data_loader_utils import post_process_punct, pre_process
+from nemo_text_processing.text_normalization.normalize import Normalizer
+from pynini.lib import rewrite
+from tqdm import tqdm
+
+try:
+    from nemo.collections.asr.metrics.wer import word_error_rate
+    from nemo.collections.asr.models import ASRModel
+
+    ASR_AVAILABLE = True
+except (ModuleNotFoundError, ImportError):
+    ASR_AVAILABLE = False
+
 parser = argparse.ArgumentParser(description="Re-scoring")
-parser.add_argument("--lang", default="en", type=str, choices=["en"])
+parser.add_argument("--lang", default="de", type=str, choices=["en"])
 parser.add_argument("--n_tagged", default=100, type=int, help="Number WFST options")
 parser.add_argument("--context_len", default=-1, type=int, help="Context length, -1 to use full context")
 parser.add_argument("--threshold", default=0.2, type=float, help="delta threshold value")
@@ -52,7 +74,26 @@ parser.add_argument(
     help="Set to True to re-create pickle file with WFST normalization options",
 )
 parser.add_argument("--batch_size", default=200, type=int, help="Batch size for parallel processing")
-
+parser.add_argument(
+    '--model', type=str, default='QuartzNet15x5Base-En', help='Pre-trained model name or path to model checkpoint'
+)
+parser.add_argument(
+    "--no_remove_punct_for_cer",
+    help="Set to True to NOT remove punctuation before calculating CER",
+    action="store_true",
+)
+parser.add_argument(
+        "--cer_threshold",
+        default=100,
+        type=int,
+        help="if CER for pred_text is above the cer_threshold, no normalization will be performed",
+    )
+# parser.add_argument(
+#         "--language", help="Select target language", choices=["en", "ru", "de", "es"], default="de", type=str
+#     )
+# # parser.add_argument("--audio_data", default=None, help="path to an audio file or .json manifest")
+# # parser.add_argument("--metadata_file", default=None, help="path to a metadata file")
+parser.add_argument("--verbose", help="print info for debugging", action="store_true")
 
 def rank(sentences: List[str], labels: List[int], models: Dict[str, 'Model'], context_len=None, do_lower=True):
     """
@@ -176,13 +217,133 @@ def threshold(norm_texts_weights, unchanged=True, replacement=True):
 
     return norm_texts_weights
 
+def calculate_cer(normalized_texts: List[str], pred_text: str, remove_punct=False) -> List[Tuple[str, float]]:
+    """
+    Calculates character error rate (CER)
+
+    Args:
+        normalized_texts: normalized text options
+        pred_text: ASR model output
+
+    Returns: normalized options with corresponding CER
+    """
+    normalized_options = []
+    for text in normalized_texts:
+        text_clean = text.replace('-', ' ').lower()
+        if remove_punct:
+            for punct in "!?:;,.-()*+-/<=>@^_":
+                text_clean = text_clean.replace(punct, "")
+        cer = round(word_error_rate([pred_text], [text_clean], use_cer=True) * 100, 2)
+        normalized_options.append((text, cer))
+    return normalized_options
+
+
+def select_best_match(
+        normalized_texts: List[str],
+        input_text: str,
+        pred_text: str,
+        verbose: bool = False,
+        remove_punct: bool = False,
+        cer_threshold: int = 100,
+    ):
+        """
+        Selects the best normalization option based on the lowest CER
+
+        Args:
+            normalized_texts: normalized text options
+            input_text: input text
+            pred_text: ASR model transcript of the audio file corresponding to the normalized text
+            verbose: whether to print intermediate meta information
+            remove_punct: whether to remove punctuation before calculating CER
+            cer_threshold: if CER for pred_text is above the cer_threshold, no normalization will be performed
+
+        Returns:
+            normalized text with the lowest CER and CER value
+        """
+        if pred_text == "":
+            return input_text, cer_threshold
+        normalized_texts_texts = normalized_texts[0]
+        print('normalized_texts_texts', normalized_texts_texts)
+        normalized_texts_weights = normalized_texts[1]
+        print('normalized_texts_weights', normalized_texts_weights)
+        normalized_texts_cers = calculate_cer(normalized_texts_texts, pred_text, remove_punct)
+        print('normalized_texts_cers (pre-sort)', normalized_texts_cers)
+        norm_infos = []
+
+        for idx, x in enumerate(normalized_texts_cers):
+            norm_info = list(normalized_texts_cers[idx])
+            norm_info.append(normalized_texts_weights[idx])
+            norm_infos.append(norm_info)
+
+        print('normalized_texts_cers (post-sort)', norm_infos)
+
+
+        normalized_texts_cers = sorted(norm_infos, key=lambda x: x[1])
+
+        cer_filtered_sampels = [[],[]]
+
+        subset_number = min(len(normalized_texts_cers), 5)
+
+        for idx, text_cer in enumerate(normalized_texts_cers[:subset_number]):
+            normalized_text, cer, weight = text_cer
+            if cer > cer_threshold:
+                pass
+            else:
+                cer_filtered_sampels[0].append(normalized_text)
+                cer_filtered_sampels[1].append(normalized_texts_weights[idx])
+        
+        print('cer_filtered_sampels', cer_filtered_sampels)
+
+        if verbose:
+            print('-' * 30)
+            for option in normalized_texts:
+                print(option)
+            print('-' * 30)
+
+        return cer_filtered_sampels, normalized_texts_cers
+
 
 def main():
     args = parser.parse_args()
 
+    def get_asr_model(asr_model):
+        """
+        Returns ASR Model
+
+        Args:
+            asr_model: NeMo ASR model
+        """
+        if os.path.exists(args.model):
+            asr_model = ASRModel.restore_from(asr_model)
+        elif args.model in ASRModel.get_available_model_names():
+            asr_model = ASRModel.from_pretrained(asr_model)
+        else:
+            raise ValueError(
+                f'Provide path to the pretrained checkpoint or choose from {ASRModel.get_available_model_names()}'
+            )
+        return asr_model
+
     logging.setLevel(logging.INFO)
     lang = args.lang
-    input_f = args.data
+    # input_f = args.data
+
+    metadata = dict()
+    all_audio_data = []
+    all_input_text = []
+    all_targets = []
+
+    # with open(args.audio_data) as f:
+        # for x in f:
+            # all_audio_data.append(x.strip())
+
+    with open(args.data) as f:
+        for line in f:
+            filename, _, _, text = line.strip().split('|')
+            metadata[filename] = text
+            all_audio_data.append(f'testdata/wavs/{filename}.wav')
+            all_input_text.append(text)
+            all_targets.append([])
+
 
     if args.data == "text_normalization_dataset_files/LibriTTS.json":
         args.dataset = "libritts"
@@ -195,9 +356,18 @@ def main():
 
     print("Create Masked Language Model...")
     models = model_utils.init_models(model_name_list=args.model_name)
-    input_fs = input_f.split(",")
+
+    # input_fs = input_f.split(",")
     print("LOAD DATA...")
-    inputs, targets, _, _ = utils.load_data(input_fs)
+    # inputs, targets, _, _ = utils.load_data(input_fs)
+
+    # print('targets', targets)
+
+    
+    
+    inputs = all_input_text
+    targets = all_targets
+
     pre_inputs, pre_targets = utils.clean_pre_norm(dataset=args.dataset, inputs=inputs, targets=targets)
 
     print("INIT WFST...")
@@ -209,6 +379,8 @@ def main():
     p_file = (
         f"norm_texts_weights_{args.n_tagged}_{os.path.basename(args.data)}_{args.context_len}_{args.threshold}.pkl"
     )
+    
+    asr_model = get_asr_model('stt_en_conformer_ctc_large').to('cpu')
 
     if not os.path.exists(p_file) or args.regenerate_pkl:
         print(f"Creating WFST and saving to {p_file}")
@@ -216,6 +388,7 @@ def main():
         def __process_batch(batch_idx, batch, dir_name):
             normalized = []
             for x in tqdm(batch):
+                
                 ns, ws = normalizer.normalize(x, n_tagged=args.n_tagged, punct_post_process=False)
                 ns = [re.sub(r"<(.+?)>", r"< \1 >", x) for x in ns]
                 normalized.append((ns, ws))
@@ -260,10 +433,33 @@ def main():
 
     # reduce number of options by selecting options with the smallest number of unchanged words
     norm_texts_weights = threshold(norm_texts_weights)
+    norm_texts_weights_cers = []
+
+    for idx, texts in enumerate(norm_texts_weights):
+
+        print('norm_texts_weights', norm_texts_weights[idx])
+        print('pre_inputs', pre_inputs)
+
+        
+
+        pred_text = asr_model.transcribe([all_audio_data[idx]])[0]
+
+        norm_texts_weights_cer, cer = select_best_match(
+                            normalized_texts=texts,
+                            pred_text=pred_text,
+                            input_text=pre_inputs[idx],
+                            verbose=args.verbose,
+                            remove_punct=not args.no_remove_punct_for_cer,
+                            cer_threshold=args.cer_threshold,
+                        )
+        print(f"Transcript: {pred_text}")
+        print(f"Normalized (audio): {norm_texts_weights_cer}")
+        print(f"Normalized (text): {norm_texts_weights}")
+        norm_texts_weights_cers.append(norm_texts_weights_cer)
 
     print("POST PROCESSING...")
     post_targets, post_norm_texts_weights = utils.clean_post_norm(
-        dataset=args.dataset, inputs=pre_inputs, targets=pre_targets, norm_texts=norm_texts_weights
+        dataset=args.dataset, inputs=pre_inputs, targets=pre_targets, norm_texts=norm_texts_weights_cers
     )
 
     print("GETTING LABELS...")
@@ -275,7 +471,6 @@ def main():
     model_stats = {m: 0 for m in models}
     gt_in_options = 0
     best_rescore = []
-
     for i, example in tqdm(enumerate(zip(post_norm_texts_weights, labels))):
         data, curr_labels = example
         assert len(data[0]) == len(curr_labels)
@@ -290,17 +485,19 @@ def main():
         df["weights"] = data[1]
 
         do_print = False
+
         for model in models:
             # one hot vector for predictions, 1 for the best score option
             df[f"{model}_pred"] = (df[model] == min(df[model])).astype(int)
             # add constrain when multiple correct labels per example
             pred_is_correct = min(sum((df["labels"] == df[f"{model}_pred"]) & df["labels"] == 1), 1)
+
             try:
                 print('BEST WFST:', df[df[f"{model}_pred"] == 1].sent[0])
                 best_rescore.append(df[df[f"{model}_pred"] == 1].sent[0])
             except:
-                best_rescore.append("")
-            
+                best_rescore.append("")   
+
             if not pred_is_correct or logging.getEffectiveLevel() <= logging.DEBUG:
                 do_print = True
 
@@ -318,21 +515,18 @@ def main():
     if gt_in_options != len(post_norm_texts_weights):
         print("WFST options for some examples don't contain the ground truth:")
         all_final_transform = []
-        
         for i in examples_with_no_labels_among_wfst:
             print(f"INPUT: {pre_inputs[i]}")
             print(f"GT   : {post_targets[i]}\n")
-            
             min_index = post_norm_texts_weights[i][1].index(min(post_norm_texts_weights[i][1]))
+            all_final_transform.append((pre_inputs[i], post_norm_texts_weights[i][0][min_index])) 
             print(f"WFST:", post_norm_texts_weights[i][0][min_index])
-            all_final_transform.append((pre_inputs[i], post_norm_texts_weights[i][0][min_index]))
-            # for x in post_norm_texts_weights[i]:
-                # print(x)
             print("=" * 40)
+
     with open('wfst_output.txt', 'w') as f:
         for i, x in enumerate(all_final_transform):
-            print(f"Raw:{x[0]}\nWFST:{x[1]}\nRescored:{best_rescore[i]}\n\n")
-            f.write(f"Raw:{x[0]}\nWFST:{x[1]}\nRescored:{best_rescore[i]}\n\n")
+            print(f"Raw:   {x[0]}\nWFST:  {x[1]}\nRes:   {best_rescore[i]}\n\n")
+            f.write(f"Raw:   {x[0]}\nWFST:  {x[1]}\nRes:   {best_rescore[i]}\n\n")
 
     all_correct = True
     for model, correct in model_stats.items():
