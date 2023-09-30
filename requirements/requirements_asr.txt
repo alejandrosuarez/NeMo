@@ -18,3 +18,4 @@ scipy>=0.14
 soundfile
 sox
 texterrors
+pydantic>=2.4.0 # not directly required, pinned by Snyk to avoid a vulnerability
