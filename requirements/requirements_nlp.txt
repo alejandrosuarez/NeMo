@@ -5,7 +5,7 @@ fasttext
 flask_restful
 ftfy
 gdown
-gradio==3.4.0
+gradio==4.11.0
 h5py
 ijson
 inflect
@@ -18,3 +18,4 @@ pangu
 rapidfuzz
 sacrebleu[ja]
 sentence_transformers
+transformers>=4.36.0 # not directly required, pinned by Snyk to avoid a vulnerability
