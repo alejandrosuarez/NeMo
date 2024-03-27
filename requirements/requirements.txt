@@ -1,7 +1,7 @@
 huggingface_hub
 numba
 numpy>=1.22
-onnx>=1.7.0
+onnx>=1.16.0
 python-dateutil
 ruamel.yaml
 scikit-learn
