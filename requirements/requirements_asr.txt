@@ -18,3 +18,4 @@ scipy>=0.14
 soundfile
 sox
 texterrors
+pillow>=10.3.0 # not directly required, pinned by Snyk to avoid a vulnerability
