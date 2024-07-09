@@ -6,3 +6,4 @@ sphinx-book-theme
 sphinx-copybutton
 sphinxcontrib-bibtex
 wrapt
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
