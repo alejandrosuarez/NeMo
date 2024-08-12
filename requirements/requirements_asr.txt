@@ -18,3 +18,4 @@ scipy>=0.14
 soundfile
 sox
 texterrors
+nltk>=3.8.2 # not directly required, pinned by Snyk to avoid a vulnerability
